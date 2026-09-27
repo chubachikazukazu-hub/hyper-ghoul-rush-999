@@ -1,0 +1,96 @@
+name: Publish HYPER Ghoul RUSH 999
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build site from latest release SB3
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request, zipfile, io, shutil
+          from pathlib import Path
+
+          OWNER = "chubachikazukazu-hub"
+          REPO = "hyper-ghoul-rush-999"
+          SITE = Path("site")
+          ASSETS = SITE / "assets"
+          SITE.mkdir(exist_ok=True)
+          ASSETS.mkdir(exist_ok=True)
+
+          def get(url):
+              req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
+              with urllib.request.urlopen(req, timeout=120) as r:
+                  return r.read()
+
+          rel = json.loads(get(f"https://api.github.com/repos/{OWNER}/{REPO}/releases/latest"))
+          sb3s = [a for a in rel.get("assets", []) if a.get("name", "").lower().endswith(".sb3")]
+          if not sb3s:
+              raise RuntimeError("Latest release has no .sb3 asset")
+          sb3 = get(sb3s[0]["browser_download_url"])
+
+          with zipfile.ZipFile(io.BytesIO(sb3)) as z:
+              project = z.read("project.json")
+              (SITE / "project.json").write_bytes(project)
+              for info in z.infolist():
+                  if info.is_dir() or info.filename == "project.json":
+                      continue
+                  name = Path(info.filename).name
+                  if name:
+                      (ASSETS / name).write_bytes(z.read(info))
+
+          scaff = get("https://cdn.jsdelivr.net/npm/@turbowarp/scaffolding@0.4.0/dist/scaffolding-with-music.js")
+          (SITE / "scaffolding.js").write_bytes(scaff)
+          (SITE / ".nojekyll").write_text("")
+
+          html = r"""<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>HYPER喰種RUSHシミュレータ999</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;width:100%;height:100%;background:#000;color:#fff;font-family:system-ui,-apple-system,sans-serif;overflow:hidden}#app{width:100%;height:100%;display:flex;flex-direction:column}#bar{height:46px;display:flex;gap:7px;align-items:center;padding:5px 7px;background:#111;flex:0 0 auto}button{border:0;border-radius:10px;padding:8px 11px;background:#292929;color:#fff;font-weight:800}button:disabled{opacity:.4}#start{background:#16a34a}#wrap{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center}#project{width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden}#cover{position:absolute;inset:0;z-index:5;background:#050505;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px}#launch{display:none;margin-top:18px;background:#16a34a;font-size:16px;padding:13px 24px}#err{color:#ff8a8a;margin-top:12px;white-space:pre-wrap;font-size:12px}.sub{color:#bbb;font-size:13px;line-height:1.7}
+</style>
+<script src="./scaffolding.js"></script>
+</head>
+<body>
+<div id="app"><div id="bar"><button id="start" disabled>▶ 開始</button><button id="restart" disabled>↻ 再起動</button><button id="full">⛶ 全画面</button></div><div id="wrap"><div id="project"></div><div id="cover"><div><h2>HYPER喰種RUSH 999</h2><div id="msg" class="sub">シミュレータを読み込み中…<br>初回は時間がかかる場合があります。</div><button id="launch">▶ シミュレータ開始</button><div id="err"></div></div></div></div></div>
+<script>
+(async()=>{const q=s=>document.querySelector(s),cover=q('#cover'),msg=q('#msg'),launch=q('#launch'),err=q('#err'),start=q('#start'),restart=q('#restart');try{const sc=new Scaffolding.Scaffolding();sc.width=480;sc.height=360;sc.resizeMode='preserve-ratio';sc.editableLists=false;sc.shouldConnectPeripherals=true;sc.usePackagedRuntime=false;sc.setup();sc.appendTo(q('#project'));const storage=sc.storage;storage.addWebStore([storage.AssetType.ImageVector,storage.AssetType.ImageBitmap,storage.AssetType.Sound,storage.AssetType.Font].filter(Boolean),a=>new URL('./assets/'+a.assetId+'.'+a.dataFormat,location).href);const r=await fetch('./project.json',{cache:'force-cache'});if(!r.ok)throw new Error('project.json HTTP '+r.status);await sc.loadProject(await r.arrayBuffer());msg.innerHTML='準備完了！<br>下のボタンを押してください。';launch.style.display='inline-block';start.disabled=false;restart.disabled=false;const run=()=>{cover.style.display='none';try{sc.vm.runtime.audioEngine.audioContext.resume()}catch(e){}sc.greenFlag();try{sc.relayout()}catch(e){}};launch.onclick=run;start.onclick=()=>sc.greenFlag();restart.onclick=()=>{try{sc.vm.stopAll()}catch(e){}setTimeout(()=>sc.greenFlag(),80)};q('#full').onclick=async()=>{try{const el=q('#wrap');if(!document.fullscreenElement)await el.requestFullscreen();else await document.exitFullscreen();setTimeout(()=>{try{sc.relayout()}catch(e){}},100)}catch(e){}}}catch(e){console.error(e);msg.textContent='読み込みに失敗しました';err.textContent=String(e&&(e.stack||e.message)||e)}})();
+</script>
+</body></html>"""
+          (SITE / "index.html").write_text(html, encoding="utf-8")
+          print("Built", sum(1 for _ in SITE.rglob("*")), "files")
+          PY
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
