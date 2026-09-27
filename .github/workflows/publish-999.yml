@@ -2,6 +2,10 @@ name: Publish HYPER Ghoul RUSH 999
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publish-999.yml"
   release:
     types: [published]
 
@@ -17,12 +21,18 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Build site from latest release SB3
         shell: bash
         run: |
+          set -euo pipefail
           python3 - <<'PY'
-          import json, urllib.request, zipfile, io, shutil
+          import base64
+          import io
+          import json
+          import urllib.request
+          import zipfile
           from pathlib import Path
 
           OWNER = "chubachikazukazu-hub"
@@ -33,50 +43,39 @@ jobs:
           ASSETS.mkdir(exist_ok=True)
 
           def get(url):
-              req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
-              with urllib.request.urlopen(req, timeout=120) as r:
+              req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0 GitHub-Actions"})
+              with urllib.request.urlopen(req, timeout=600) as r:
                   return r.read()
 
           rel = json.loads(get(f"https://api.github.com/repos/{OWNER}/{REPO}/releases/latest"))
           sb3s = [a for a in rel.get("assets", []) if a.get("name", "").lower().endswith(".sb3")]
           if not sb3s:
               raise RuntimeError("Latest release has no .sb3 asset")
+
+          print("Downloading:", sb3s[0]["name"], sb3s[0]["size"], "bytes")
           sb3 = get(sb3s[0]["browser_download_url"])
 
           with zipfile.ZipFile(io.BytesIO(sb3)) as z:
-              project = z.read("project.json")
-              (SITE / "project.json").write_bytes(project)
+              (SITE / "project.json").write_bytes(z.read("project.json"))
+              count = 0
               for info in z.infolist():
                   if info.is_dir() or info.filename == "project.json":
                       continue
                   name = Path(info.filename).name
-                  if name:
-                      (ASSETS / name).write_bytes(z.read(info))
+                  if not name:
+                      continue
+                  (ASSETS / name).write_bytes(z.read(info))
+                  count += 1
+
+          print("Extracted assets:", count)
 
           scaff = get("https://cdn.jsdelivr.net/npm/@turbowarp/scaffolding@0.4.0/dist/scaffolding-with-music.js")
           (SITE / "scaffolding.js").write_bytes(scaff)
-          (SITE / ".nojekyll").write_text("")
+          (SITE / ".nojekyll").write_text("", encoding="utf-8")
 
-          html = r"""<!doctype html>
-<html lang="ja">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<meta name="theme-color" content="#000000">
-<title>HYPER喰種RUSHシミュレータ999</title>
-<style>
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;width:100%;height:100%;background:#000;color:#fff;font-family:system-ui,-apple-system,sans-serif;overflow:hidden}#app{width:100%;height:100%;display:flex;flex-direction:column}#bar{height:46px;display:flex;gap:7px;align-items:center;padding:5px 7px;background:#111;flex:0 0 auto}button{border:0;border-radius:10px;padding:8px 11px;background:#292929;color:#fff;font-weight:800}button:disabled{opacity:.4}#start{background:#16a34a}#wrap{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center}#project{width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden}#cover{position:absolute;inset:0;z-index:5;background:#050505;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px}#launch{display:none;margin-top:18px;background:#16a34a;font-size:16px;padding:13px 24px}#err{color:#ff8a8a;margin-top:12px;white-space:pre-wrap;font-size:12px}.sub{color:#bbb;font-size:13px;line-height:1.7}
-</style>
-<script src="./scaffolding.js"></script>
-</head>
-<body>
-<div id="app"><div id="bar"><button id="start" disabled>▶ 開始</button><button id="restart" disabled>↻ 再起動</button><button id="full">⛶ 全画面</button></div><div id="wrap"><div id="project"></div><div id="cover"><div><h2>HYPER喰種RUSH 999</h2><div id="msg" class="sub">シミュレータを読み込み中…<br>初回は時間がかかる場合があります。</div><button id="launch">▶ シミュレータ開始</button><div id="err"></div></div></div></div></div>
-<script>
-(async()=>{const q=s=>document.querySelector(s),cover=q('#cover'),msg=q('#msg'),launch=q('#launch'),err=q('#err'),start=q('#start'),restart=q('#restart');try{const sc=new Scaffolding.Scaffolding();sc.width=480;sc.height=360;sc.resizeMode='preserve-ratio';sc.editableLists=false;sc.shouldConnectPeripherals=true;sc.usePackagedRuntime=false;sc.setup();sc.appendTo(q('#project'));const storage=sc.storage;storage.addWebStore([storage.AssetType.ImageVector,storage.AssetType.ImageBitmap,storage.AssetType.Sound,storage.AssetType.Font].filter(Boolean),a=>new URL('./assets/'+a.assetId+'.'+a.dataFormat,location).href);const r=await fetch('./project.json',{cache:'force-cache'});if(!r.ok)throw new Error('project.json HTTP '+r.status);await sc.loadProject(await r.arrayBuffer());msg.innerHTML='準備完了！<br>下のボタンを押してください。';launch.style.display='inline-block';start.disabled=false;restart.disabled=false;const run=()=>{cover.style.display='none';try{sc.vm.runtime.audioEngine.audioContext.resume()}catch(e){}sc.greenFlag();try{sc.relayout()}catch(e){}};launch.onclick=run;start.onclick=()=>sc.greenFlag();restart.onclick=()=>{try{sc.vm.stopAll()}catch(e){}setTimeout(()=>sc.greenFlag(),80)};q('#full').onclick=async()=>{try{const el=q('#wrap');if(!document.fullscreenElement)await el.requestFullscreen();else await document.exitFullscreen();setTimeout(()=>{try{sc.relayout()}catch(e){}},100)}catch(e){}}}catch(e){console.error(e);msg.textContent='読み込みに失敗しました';err.textContent=String(e&&(e.stack||e.message)||e)}})();
-</script>
-</body></html>"""
-          (SITE / "index.html").write_text(html, encoding="utf-8")
-          print("Built", sum(1 for _ in SITE.rglob("*")), "files")
+          html_b64 = "PCFkb2N0eXBlIGh0bWw+CjxodG1sIGxhbmc9ImphIj4KPGhlYWQ+CjxtZXRhIGNoYXJzZXQ9InV0Zi04Ij4KPG1ldGEgbmFtZT0idmlld3BvcnQiIGNvbnRlbnQ9IndpZHRoPWRldmljZS13aWR0aCxpbml0aWFsLXNjYWxlPTEsbWF4aW11bS1zY2FsZT0xLHVzZXItc2NhbGFibGU9bm8sdmlld3BvcnQtZml0PWNvdmVyIj4KPG1ldGEgbmFtZT0idGhlbWUtY29sb3IiIGNvbnRlbnQ9IiMwMDAwMDAiPgo8dGl0bGU+SFlQRVLllrDnqK5SVVNI44K344Of44Ol44Os44O844K/OTk5PC90aXRsZT4KPHN0eWxlPgoqe2JveC1zaXppbmc6Ym9yZGVyLWJveDstd2Via2l0LXRhcC1oaWdobGlnaHQtY29sb3I6dHJhbnNwYXJlbnR9Cmh0bWwsYm9keXttYXJnaW46MDt3aWR0aDoxMDAlO2hlaWdodDoxMDAlO2JhY2tncm91bmQ6IzAwMDtjb2xvcjojZmZmO2ZvbnQtZmFtaWx5OnN5c3RlbS11aSwtYXBwbGUtc3lzdGVtLHNhbnMtc2VyaWY7b3ZlcmZsb3c6aGlkZGVufQojYXBwe3dpZHRoOjEwMCU7aGVpZ2h0OjEwMCU7ZGlzcGxheTpmbGV4O2ZsZXgtZGlyZWN0aW9uOmNvbHVtbn0KI2JhcntoZWlnaHQ6NDZweDtkaXNwbGF5OmZsZXg7Z2FwOjdweDthbGlnbi1pdGVtczpjZW50ZXI7cGFkZGluZzo1cHggN3B4O2JhY2tncm91bmQ6IzExMTtmbGV4OjAgMCBhdXRvfQpidXR0b257Ym9yZGVyOjA7Ym9yZGVyLXJhZGl1czoxMHB4O3BhZGRpbmc6OHB4IDExcHg7YmFja2dyb3VuZDojMjkyOTI5O2NvbG9yOiNmZmY7Zm9udC13ZWlnaHQ6ODAwfQpidXR0b246ZGlzYWJsZWR7b3BhY2l0eTouNH0KI3N0YXJ0e2JhY2tncm91bmQ6IzE2YTM0YX0KI3dyYXB7cG9zaXRpb246cmVsYXRpdmU7ZmxleDoxO21pbi1oZWlnaHQ6MDtkaXNwbGF5OmZsZXg7YWxpZ24taXRlbXM6Y2VudGVyO2p1c3RpZnktY29udGVudDpjZW50ZXJ9CiNwcm9qZWN0e3dpZHRoOjEwMCU7aGVpZ2h0OjEwMCU7ZGlzcGxheTpmbGV4O2FsaWduLWl0ZW1zOmNlbnRlcjtqdXN0aWZ5LWNvbnRlbnQ6Y2VudGVyO292ZXJmbG93OmhpZGRlbn0KI2NvdmVye3Bvc2l0aW9uOmFic29sdXRlO2luc2V0OjA7ei1pbmRleDo1O2JhY2tncm91bmQ6IzA1MDUwNTtkaXNwbGF5OmZsZXg7YWxpZ24taXRlbXM6Y2VudGVyO2p1c3RpZnktY29udGVudDpjZW50ZXI7dGV4dC1hbGlnbjpjZW50ZXI7cGFkZGluZzoyNHB4fQojbGF1bmNoe2Rpc3BsYXk6bm9uZTttYXJnaW4tdG9wOjE4cHg7YmFja2dyb3VuZDojMTZhMzRhO2ZvbnQtc2l6ZToxNnB4O3BhZGRpbmc6MTNweCAyNHB4fQojZXJye2NvbG9yOiNmZjhhOGE7bWFyZ2luLXRvcDoxMnB4O3doaXRlLXNwYWNlOnByZS13cmFwO2ZvbnQtc2l6ZToxMnB4fQouc3Vie2NvbG9yOiNiYmI7Zm9udC1zaXplOjEzcHg7bGluZS1oZWlnaHQ6MS43fQo8L3N0eWxlPgo8c2NyaXB0IHNyYz0iLi9zY2FmZm9sZGluZy5qcyI+PC9zY3JpcHQ+CjwvaGVhZD4KPGJvZHk+CjxkaXYgaWQ9ImFwcCI+CiAgPGRpdiBpZD0iYmFyIj4KICAgIDxidXR0b24gaWQ9InN0YXJ0IiBkaXNhYmxlZD7ilrYg6ZaL5aeLPC9idXR0b24+CiAgICA8YnV0dG9uIGlkPSJyZXN0YXJ0IiBkaXNhYmxlZD7ihrsg5YaN6LW35YuVPC9idXR0b24+CiAgICA8YnV0dG9uIGlkPSJmdWxsIj7im7Yg5YWo55S76Z2iPC9idXR0b24+CiAgPC9kaXY+CiAgPGRpdiBpZD0id3JhcCI+CiAgICA8ZGl2IGlkPSJwcm9qZWN0Ij48L2Rpdj4KICAgIDxkaXYgaWQ9ImNvdmVyIj4KICAgICAgPGRpdj4KICAgICAgICA8aDI+SFlQRVLllrDnqK5SVVNIIDk5OTwvaDI+CiAgICAgICAgPGRpdiBpZD0ibXNnIiBjbGFzcz0ic3ViIj7jgrfjg5/jg6Xjg6zjg7zjgr/jgpLoqq3jgb/ovrzjgb/kuK3igKY8YnI+5Yid5Zue44Gv5pmC6ZaT44GM44GL44GL44KL5aC05ZCI44GM44GC44KK44G+44GZ44CCPC9kaXY+CiAgICAgICAgPGJ1dHRvbiBpZD0ibGF1bmNoIj7ilrYg44K344Of44Ol44Os44O844K/6ZaL5aeLPC9idXR0b24+CiAgICAgICAgPGRpdiBpZD0iZXJyIj48L2Rpdj4KICAgICAgPC9kaXY+CiAgICA8L2Rpdj4KICA8L2Rpdj4KPC9kaXY+CjxzY3JpcHQ+Cihhc3luYygpPT57CiAgY29uc3QgcT1zPT5kb2N1bWVudC5xdWVyeVNlbGVjdG9yKHMpLGNvdmVyPXEoJyNjb3ZlcicpLG1zZz1xKCcjbXNnJyksbGF1bmNoPXEoJyNsYXVuY2gnKSxlcnI9cSgnI2VycicpLHN0YXJ0PXEoJyNzdGFydCcpLHJlc3RhcnQ9cSgnI3Jlc3RhcnQnKTsKICB0cnl7CiAgICBjb25zdCBzYz1uZXcgU2NhZmZvbGRpbmcuU2NhZmZvbGRpbmcoKTsKICAgIHNjLndpZHRoPTQ4MDsKICAgIHNjLmhlaWdodD0zNjA7CiAgICBzYy5yZXNpemVNb2RlPSdwcmVzZXJ2ZS1yYXRpbyc7CiAgICBzYy5lZGl0YWJsZUxpc3RzPWZhbHNlOwogICAgc2Muc2hvdWxkQ29ubmVjdFBlcmlwaGVyYWxzPXRydWU7CiAgICBzYy51c2VQYWNrYWdlZFJ1bnRpbWU9ZmFsc2U7CiAgICBzYy5zZXR1cCgpOwogICAgc2MuYXBwZW5kVG8ocSgnI3Byb2plY3QnKSk7CgogICAgY29uc3Qgc3RvcmFnZT1zYy5zdG9yYWdlOwogICAgc3RvcmFnZS5hZGRXZWJTdG9yZSgKICAgICAgW3N0b3JhZ2UuQXNzZXRUeXBlLkltYWdlVmVjdG9yLHN0b3JhZ2UuQXNzZXRUeXBlLkltYWdlQml0bWFwLHN0b3JhZ2UuQXNzZXRUeXBlLlNvdW5kXSwKICAgICAgYT0+bmV3IFVSTCgnLi9hc3NldHMvJythLmFzc2V0SWQrJy4nK2EuZGF0YUZvcm1hdCxsb2NhdGlvbikuaHJlZgogICAgKTsKCiAgICBjb25zdCByPWF3YWl0IGZldGNoKCcuL3Byb2plY3QuanNvbicse2NhY2hlOidmb3JjZS1jYWNoZSd9KTsKICAgIGlmKCFyLm9rKSB0aHJvdyBuZXcgRXJyb3IoJ3Byb2plY3QuanNvbiBIVFRQICcrci5zdGF0dXMpOwogICAgYXdhaXQgc2MubG9hZFByb2plY3QoYXdhaXQgci5hcnJheUJ1ZmZlcigpKTsKCiAgICBtc2cuaW5uZXJIVE1MPSfmupblgpnlrozkuobvvIE8YnI+5LiL44Gu44Oc44K/44Oz44KS5oq844GX44Gm44GP44Gg44GV44GE44CCJzsKICAgIGxhdW5jaC5zdHlsZS5kaXNwbGF5PSdpbmxpbmUtYmxvY2snOwogICAgc3RhcnQuZGlzYWJsZWQ9ZmFsc2U7CiAgICByZXN0YXJ0LmRpc2FibGVkPWZhbHNlOwoKICAgIGNvbnN0IHJlc3VtZUF1ZGlvPSgpPT57dHJ5e3NjLnZtLnJ1bnRpbWUuYXVkaW9FbmdpbmUuYXVkaW9Db250ZXh0LnJlc3VtZSgpfWNhdGNoKGUpe319OwogICAgY29uc3QgcnVuPSgpPT57Y292ZXIuc3R5bGUuZGlzcGxheT0nbm9uZSc7cmVzdW1lQXVkaW8oKTtzYy5ncmVlbkZsYWcoKTt0cnl7c2MucmVsYXlvdXQoKX1jYXRjaChlKXt9fTsKICAgIGxhdW5jaC5vbmNsaWNrPXJ1bjsKICAgIHN0YXJ0Lm9uY2xpY2s9KCk9PntyZXN1bWVBdWRpbygpO3NjLmdyZWVuRmxhZygpfTsKICAgIHJlc3RhcnQub25jbGljaz0oKT0+e3RyeXtzYy52bS5zdG9wQWxsKCl9Y2F0Y2goZSl7fTtzZXRUaW1lb3V0KCgpPT5zYy5ncmVlbkZsYWcoKSw4MCl9OwogICAgcSgnI2Z1bGwnKS5vbmNsaWNrPWFzeW5jKCk9PnsKICAgICAgdHJ5ewogICAgICAgIGNvbnN0IGVsPXEoJyN3cmFwJyk7CiAgICAgICAgaWYoIWRvY3VtZW50LmZ1bGxzY3JlZW5FbGVtZW50KSBhd2FpdCBlbC5yZXF1ZXN0RnVsbHNjcmVlbigpOwogICAgICAgIGVsc2UgYXdhaXQgZG9jdW1lbnQuZXhpdEZ1bGxzY3JlZW4oKTsKICAgICAgICBzZXRUaW1lb3V0KCgpPT57dHJ5e3NjLnJlbGF5b3V0KCl9Y2F0Y2goZSl7fX0sMTAwKTsKICAgICAgfWNhdGNoKGUpe30KICAgIH07CiAgICBhZGRFdmVudExpc3RlbmVyKCdyZXNpemUnLCgpPT57dHJ5e3NjLnJlbGF5b3V0KCl9Y2F0Y2goZSl7fX0pOwogIH1jYXRjaChlKXsKICAgIGNvbnNvbGUuZXJyb3IoZSk7CiAgICBtc2cudGV4dENvbnRlbnQ9J+iqreOBv+i+vOOBv+OBq+WkseaVl+OBl+OBvuOBl+OBnyc7CiAgICBlcnIudGV4dENvbnRlbnQ9U3RyaW5nKGUmJihlLnN0YWNrfHxlLm1lc3NhZ2UpfHxlKTsKICB9Cn0pKCk7Cjwvc2NyaXB0Pgo8L2JvZHk+CjwvaHRtbD4K"
+          (SITE / "index.html").write_bytes(base64.b64decode(html_b64))
+          print("Site files ready:", sum(1 for p in SITE.rglob("*") if p.is_file()))
           PY
 
       - name: Upload Pages artifact
